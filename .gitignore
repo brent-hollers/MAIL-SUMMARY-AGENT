@@ -1,0 +1,69 @@
+# =============================================================================
+# .gitignore
+# =============================================================================
+
+# --- Project secrets & personal config (MOST IMPORTANT) -----------------------
+# config.yaml is the user's REAL config: it names secret refs and lists VIP
+# contacts (personal data). Only config.example.yaml is committed.
+config.yaml
+config.*.yaml
+!config.example.yaml
+
+# Secret material in any common form. The design keeps keys OUT of config (only
+# api_key_ref names live there), but these are ignored defensively so a key file
+# can never be committed by accident.
+.env
+.env.*
+*.key
+*.pem
+secrets.toml
+secrets.yaml
+secrets.json
+
+# --- Runtime state & data (Stage 3) ------------------------------------------
+# The SQLite state DB (run ledger, task carry-over, gate audit, dedup keys) is
+# local runtime state, never source. Ignore the file and its WAL/journal siblings.
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Local logs / observability output.
+*.log
+logs/
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test & type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# --- Editor / OS noise -------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

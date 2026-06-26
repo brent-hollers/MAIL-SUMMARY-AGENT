@@ -1,0 +1,143 @@
+# =============================================================================
+# config.example.yaml
+# =============================================================================
+# Copy this file to `config.yaml` and fill in your own values. `config.yaml`
+# should be gitignored (it names your secrets and lists your VIP contacts).
+#
+# The config has four orthogonal blocks, each answering one question:
+#   models      -- what model endpoints exist and how to reach them
+#   tiers       -- which capability is handled by which model
+#   thresholds  -- the tunable knobs the four defenses depend on
+#   workflow    -- your personal run settings (VIPs, run times, read scope)
+#
+# Keeping these separate is deliberate: you can repoint a capability to a
+# different model (tiers) without touching connection details (models), and
+# tune a defense (thresholds) without touching either.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# BLOCK A — models: a registry of model endpoints, keyed by a LOGICAL name.
+# -----------------------------------------------------------------------------
+# Each entry is pure connection info -- no workflow knowledge lives here.
+# Everything elsewhere refers to a model by its logical key (e.g. "local-8b"),
+# never by its base_url or model_name. That indirection is what makes swapping a
+# model a one-line edit here: change the entry, and every capability pointed at
+# that key follows automatically.
+#
+# All endpoints are OpenAI-compatible (the /v1/chat/completions shape). Ollama
+# and vLLM both speak this directly; Claude and Gemini are reached through their
+# OpenAI-compatible endpoints. That uniformity is why a single client body can
+# talk to all of them.
+models:
+
+  # The local tier -- your RTX 3090 running an ~8B model via Ollama or vLLM.
+  local-8b:
+    base_url: "http://localhost:11434/v1"   # Ollama's default OpenAI-compatible endpoint
+    model_name: "llama3.1:8b"               # whatever you've pulled; swap freely
+    context_window: 8192                     # tokens; drives compaction math
+    api_key_ref: "LOCAL_API_KEY"             # NAME of an env var / secret, NOT the key itself
+    timeout_s: 120                           # local can be slow; allow generous time
+
+  # The frontier reasoning tier -- Claude via its OpenAI-compatible endpoint.
+  frontier-claude:
+    base_url: "https://api.anthropic.com/v1"
+    model_name: "claude-sonnet-4-6"
+    context_window: 200000
+    api_key_ref: "ANTHROPIC_API_KEY"
+    timeout_s: 60
+
+  # Alternate frontier tier -- Gemini. Present so you can switch providers by
+  # editing the `tiers` block below; no code change needed.
+  frontier-gemini:
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    model_name: "gemini-2.0-flash"
+    context_window: 1000000
+    api_key_ref: "GEMINI_API_KEY"
+    timeout_s: 60
+
+
+# -----------------------------------------------------------------------------
+# BLOCK B — tiers: the capability -> model mapping.
+# -----------------------------------------------------------------------------
+# This block IS the static escalation boundary. Each capability the workflow
+# needs is bound to a logical model key from Block A. "Local does cheap work,
+# frontier does reasoning" stops being prose and becomes this table.
+#
+# To move one job across the local/frontier line, change one value here. If your
+# 8B turns out to prioritize badly, set `prioritize: frontier-claude` and nothing
+# else changes.
+#
+# WARNING: pointing a high-frequency capability (classify/summarize/route) at a
+# frontier key will quietly run up cost. The loader warns if you do this.
+tiers:
+  classify:          local-8b      # label items -- cheap, high-frequency -> local
+  prioritize:        local-8b      # assign priority -- local
+  summarize:         local-8b      # shorten prose for compaction -- local
+  route:             local-8b      # decide what happens to an item -- local
+  thread_deep_read:  frontier-claude   # read a full email chain -- genuine reasoning -> frontier
+  synthesis:         frontier-claude   # the "prepare me" synthesis -- frontier
+
+
+# -----------------------------------------------------------------------------
+# BLOCK C — thresholds: the tunable knobs the four defenses depend on.
+# -----------------------------------------------------------------------------
+# Every number the defenses need, in one place, so tuning is a config edit and
+# never a code change. These map directly onto the config objects the defense
+# modules already accept.
+thresholds:
+
+  # -- Bounded autonomy (defenses/bounded_autonomy.py) --
+  investigation_fetch_cap: 10   # max thread deep-reads per run. Tune LOOSE.
+  write_action_cap: 15          # max consequential actions staged per run. Tune TIGHT.
+
+  # -- Compaction (defenses/compaction.py -> CompactionConfig) --
+  compaction_trigger_chars: 1000   # only summarize prose longer than this
+  compaction_target_chars: 300     # length budget handed to the summarizer
+  compaction_skip_vip: true        # never summarize a VIP item's prose
+
+  # -- Verifier (defenses/verifier.py -> VerifierConfig) --
+  verifier_temporal_window_days: 365   # how far from "now" a datetime may sit
+  verifier_urgency_window_hours: 48    # a deadline within this window forces HIGH priority
+  verifier_urgency_phrases:            # lexical triggers for the urgency floor
+    - "asap"
+    - "as soon as possible"
+    - "today"
+    - "tonight"
+    - "by eod"
+    - "by end of day"
+    - "urgent"
+    - "immediately"
+
+  # -- Verifier retry policy (used by the workflow loop) --
+  verifier_max_retries: 1   # failed verification -> this many retries before shipping degraded
+
+
+# -----------------------------------------------------------------------------
+# BLOCK D — workflow: your personal run settings.
+# -----------------------------------------------------------------------------
+# The user-facing knobs. A second person running this edits Block A (their
+# endpoints) and this block (their VIPs and times) and is operational.
+workflow:
+
+  # Senders whose mail is always surfaced and never prose-summarized. Drives both
+  # the VIP-completeness verifier invariant and the compaction skip. Match is on
+  # the email address, case-insensitive.
+  vip_senders:
+    - "boss@example.com"
+    - "spouse@example.com"
+
+  # When the two one-shot runs fire. 24-hour HH:MM, in your local timezone. The
+  # scheduler (Stage 3) reads these to install the timers.
+  morning_run_time: "06:30"
+  debrief_run_time: "16:30"
+
+  # Default read depth. "headers_snippets" keeps context small; the workflow
+  # fetches a full body only when a snippet can't yield a needed field or a
+  # thread needs deep reading. (This is the only supported value for v1; listed
+  # so the seam is visible.)
+  read_scope: "headers_snippets"
+
+  # What to do when a run can't complete cleanly (a cap trips, verification fails
+  # twice). "partial_flagged" ships what it has with the degraded banner.
+  failure_mode: "partial_flagged"
